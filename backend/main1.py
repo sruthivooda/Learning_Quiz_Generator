@@ -280,6 +280,72 @@ def generate_questions(topic, subTopic, questionType, numQuestions):
         return {"questions": []}
 
     return {"questions": generated_questions}
+def generate_questions_from_file(file_path, question_type, num_questions):
+    try:
+        with open(file_path, 'rb') as pdf_file:
+            reader = PyPDF2.PdfReader(pdf_file)
+            content = ""
+            for page in reader.pages:
+                content += page.extract_text() + "\n"
+    except Exception as e:
+        return {"error": f"Error reading the PDF file: {str(e)}"}
+
+    chunks = split_into_chunks(content, max_sentences_per_chunk=6)
+    if not chunks:
+        return {"questions": []}
+
+    qg = QuestionGenerator()
+    valid_question_types = ["fill_in_the_blanks", "mcq", "True_or_false", "short_qa"]
+
+    if question_type not in valid_question_types:
+        raise ValueError(f"Invalid question type: {question_type}. Choose from {valid_question_types}.")
+
+    # Generate questions
+    generated_questions = []
+    for i, chunk in enumerate(chunks[:num_questions]):
+        raw_question = qg.generate(question_type, chunk)
+        if not raw_question:
+            print(f"Skipping chunk {i} due to empty question generation.")
+            continue
+
+        # Split the raw question using <sep>
+        question_parts = raw_question.split(SEP_TOKEN)
+        #print("questions parts", question_parts)
+
+        # Map the split parts to respective fields
+        if len(question_parts) == 3:
+            question_text = question_parts[1].strip()
+            answer_text = question_parts[2].strip()
+           # print(question_text, answer_text)
+
+            if question_type == "mcq" and answer_text:
+                distractors = generate_distractors_xai(question_text, answer_text)
+                if not distractors:
+                    distractors = ["None of the above", "Not sure", "All of the above"]
+                distractors = [opt.strip() for opt in distractors if opt.strip()]  # Clean distractors
+                options = [answer_text] + distractors
+                random.shuffle(options)  # Shuffle options to randomize their order
+
+                generated_questions.append({
+                    "questionType": question_type,
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer_text
+                })
+            else:
+                #question_text = raw_question.strip()
+                generated_questions.append({
+                    "questionType": question_type,
+                    "question": question_text,
+                    "answer": answer_text,
+                    "context": chunk
+                })
+
+    if not generated_questions:
+        print("No valid questions generated.")
+        return {"questions": []}
+
+    return {"questions": generated_questions}
 
 
 # Helper functions
@@ -315,10 +381,17 @@ if __name__ == "__main__":
     parser.add_argument('--subTopic', help="Sub-topic name")
     parser.add_argument('--questionType', required=True, help="Type of questions to generate")
     parser.add_argument('--numQuestions', type=int, required=True, help="Number of questions to generate")
+    parser.add_argument('--file', help="Path to the uploaded file", default=None)
 
+
+   
     args = parser.parse_args()
     try:
-        result = generate_questions(args.topic, args.subTopic, args.questionType, args.numQuestions)
+        if args.file:
+            result = generate_questions_from_file(args.file, args.questionType, args.numQuestions)
+        else:
+            result = generate_questions(args.topic, args.subTopic, args.questionType, args.numQuestions)
+
         print(json.dumps(result, indent=2))
     except Exception as e:
         print(f"Error occurred: {e}")
